@@ -1,1 +1,1 @@
-# COVID-19
+# The global impact of COVID-19
