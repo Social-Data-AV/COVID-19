@@ -1,0 +1,666 @@
+---
+title: "Final Project:Covid-19"
+date: "`r Sys.Date()`"
+runtime: shiny
+bibliography: reference.bib
+csl: ieee.csl
+keep_tex: TRUE
+output:
+  prettydoc::html_pretty:
+    theme:  cayman
+    highlight: github
+---
+
+
+## Introduction
+
+```{r,echo =FALSE,message=FALSE}
+library(plotly)
+library(rjson)
+library(shinythemes)
+data = read.csv('cov.txt')
+data$dateRep <- as.POSIXct(ISOdate(data$year,data$month,data$day))
+#data = aggregate(data$cases, by=list(data$countryterritoryCode,data$countriesAndTerritories),sum)
+#data
+#plot_ly(data, type='choropleth', locations=data$Group.1, z=data$x,
+          #text=data$Group.2, colorscale="Blues")
+
+
+ui = shinyUI(fluidPage(theme = shinytheme("simplex"),
+                       titlePanel(""),
+                       sidebarLayout(
+                         sidebarPanel(
+                           radioButtons("dist", 
+                                        label = h3("Select"),
+                                        choices = list("Cumulative Cases" = 'cases', 
+                                                       "Cumulative Deaths" = 'deaths'
+                                                       ),
+                                                
+                                        selected = 'cases'),
+                           sliderInput("daterange", "Date range:",
+                                       min = as.Date("2019-12-31","%Y-%m-%d"),
+                                       max = as.Date("2020-05-11","%Y-%m-%d"),
+                                       value=as.Date("2020-05-11"),
+                                       timeFormat="%Y-%m-%d"),width = 3
+                         ),
+                         
+                         mainPanel(
+                           plotlyOutput('distplot'),width = 8),
+                         
+                       )
+)
+)
+
+server = shinyServer(function(input, output) {
+  
+  output$distplot <- renderPlotly({ 
+    m = input$dist
+    n = input$daterange
+    data = subset(data,dateRep <= n )
+    countrycode = data$countryterritoryCode
+    country = data$countriesAndTerritories
+    cases = data[,m]
+    data = data.frame(countrycode,country,cases)
+    
+    data = aggregate(data$cases, by=list(data$countrycode,data$country),sum)
+    l <- list(color = toRGB("grey"), width = 0.5)
+    g <- list(
+      showframe = FALSE,
+      showcoastlines = FALSE,
+      projection = list(type = 'Mercator')
+    )
+    
+    fig <- plot_geo(data)
+    fig <- fig %>% add_trace(
+      z = ~x, color = ~x, colors = 'Reds',
+      text = ~Group.2, locations = ~Group.1, marker = list(line = l)
+    )
+    fig <- fig %>% colorbar(title = 'Total Cases')
+    fig <- fig %>% layout(
+      title = '2020 Covid-19 Distribution<br>Source:<a href="https://www.ecdc.europa.eu/en">ECDC</a>',
+      geo = g
+    )
+    fig
+    })
+  
+})
+
+shinyApp(ui = ui, server = server,options = list(width = "100%", height =300))
+
+```
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+
+
+<p style="text-align:justify> 
+Much has been written, in both academia and journalism, about the possible factors behind the uneven incidence of Covid-19 in different countries, which we have illustrated in the first part. Why is the case rate in Portugal significantly lower than that of its neighbour Spain? Or why is there a stark difference in patient outcomes in Germany vs. the United Kingdom? In this report we merge several datasets and conduct our own analysis to investigate which factors seem to correlate most strongly with the spread of the virus. We also conduct a concise literature review and assess the validity of the arguments of the authors in light of our findings.</p>
+
+***
+
+## Overview the Global Impact 
+```{r, echo=FALSE,include=FALSE}
+library(shiny)
+library(dplyr)
+library(purrr)
+library(rlang)
+library(stringr)
+library(DT)
+library(r2d3)
+library(webshot)
+library(htmlwidgets)
+library(memor)
+library(shinyjs)
+library(shinythemes)
+library(datasets)
+library(ggplot2)
+library(scales)
+library(plotly)
+data = read.csv('cov.txt')
+data$dateRep <- as.Date(ISOdate(data$year,data$month,data$day))
+      
+data = data[order(data$dateRep,decreasing =FALSE),]
+m = group_by(data,countriesAndTerritories)
+coutry_name = c('China','Spain','Italy','South_Korea','Iran','France','Denmark',
+                'United_States_of_America')
+
+ui = shinyUI(fluidPage(theme = shinytheme("simplex"),
+    titlePanel("Epidemic trend"),
+    
+    sidebarLayout(
+      sidebarPanel(
+        selectInput(
+          inputId = "countries",
+          label = "Countries:",
+          choices = c('World',coutry_name),
+          size = 9,selectize = FALSE,
+          selected = 'World'),
+        
+        radioButtons("dist", 
+                    label = h3(""),
+                    choices = list("Daily" = 'Cases(Daily)', 
+                                   "Cumulative" = 'Cases(cumulative)',
+                                   'Percentage increase' = 'Percentage increase'
+                    ),
+                    
+                    selected = 'Cases(Daily)'),
+        
+        sliderInput("daterange", "Date range:",
+                    min = as.Date("2019-12-31","%Y-%m-%d"),
+                    max = as.Date("2020-05-11","%Y-%m-%d"),
+                    value=as.Date("2020-05-11"),
+                    timeFormat="%Y-%m-%d")
+        ),
+    
+      mainPanel(
+        tabsetPanel(type = "tabs",
+                    tabPanel("Cases", plotlyOutput('distplot')),
+                    tabPanel("Deaths", plotlyOutput('distplott'))
+        )
+      )
+    )  
+  ) 
+)
+
+
+
+
+server = shinyServer(function(input, output) {
+  
+  
+  # Return the formula text for printing as a caption
+  output$distplot <- renderPlotly({
+    daterange = input$daterange
+    data = filter(data, dateRep >= "2019-12-31",dateRep <= daterange)
+    dayrange = ceiling(as.integer(diff(range(as.Date(data$dateRep))))/10)
+    dayrange = str_c(dayrange,' days')
+    
+    
+    if(input$countries == 'World'){
+      
+      if(input$dist == 'Cases(Daily)'){
+        n = aggregate(data$cases, by=list(data$dateRep),sum)
+        cases = n$x
+        dateRep = as.POSIXct(n$Group.1)
+        worlddata = data.frame(dateRep,cases)}
+      
+      else if(input$dist == 'Cases(cumulative)'){
+        n = aggregate(data$cases, by=list(data$dateRep),sum)
+        cases = cumsum(n$x)
+        dateRep = as.POSIXct(n$Group.1)
+        worlddata = data.frame(dateRep, cases)}
+      
+      else if(input$dist == 'Percentage increase'){
+        data = data[order(data$dateRep,decreasing =FALSE),]
+        n = aggregate(data$cases, by=list(data$dateRep),sum)
+        casesum = cumsum(n$x)
+        case = n$x
+        dateRep = as.POSIXct(n$Group.1)
+        worlddata = data.frame(dateRep, casesum,case)
+      
+        for (i in 2:nrow(worlddata)){
+          worlddata$cases[1] = 0
+          worlddata$cases[i] = worlddata$case[i]/worlddata$casesum[i-1]
+        }
+      
+        worlddata$cases[!is.finite(worlddata$cases)] <- 0
+      }
+      
+      v = ggplot(data=worlddata, aes(x=dateRep, y=cases)) +
+        geom_line(color="#D16103")+geom_point(color="#D16103",size = 1)+
+        scale_x_datetime(labels = date_format("%m-%d"),date_breaks = dayrange)+
+        theme_minimal()+xlab("Date") + scale_y_continuous(labels = scales::comma)+
+        ylab(input$dist)
+      ggplotly(v)
+    }
+    
+    
+    
+    else{
+      if(input$dist == 'Cases(Daily)'){
+        countrydata = subset(data,countriesAndTerritories == input$countries)
+        countrydata$dateRep = as.POSIXct(countrydata$dateRep)
+        
+      }
+      else if(input$dist == 'Cases(cumulative)'){
+        countrydata = subset(data,countriesAndTerritories == input$countries)
+        countrydata$cases = cumsum(countrydata$cases)
+        countrydata$dateRep = as.POSIXct(countrydata$dateRep)
+      }
+      
+      else if(input$dist == 'Percentage increase'){
+        countrydata = subset(data,countriesAndTerritories == input$countries)
+        
+        countrydata$casesum = cumsum(countrydata$cases)
+        
+        for (i in 2:nrow(countrydata)){
+          countrydata$cases[i] = countrydata$cases[i]/countrydata$casesum[i-1]
+          }
+        
+          countrydata$cases[!is.finite(countrydata$cases)] <- 0
+        
+        
+        
+          countrydata$dateRep = as.POSIXct(countrydata$dateRep)
+        
+          dayrange = ceiling(as.integer(diff(range(as.Date(countrydata$dateRep))))/10)
+          dayrange = str_c(dayrange,' days')
+      }
+      v = ggplot(data=countrydata, aes(x=dateRep, y=cases, group=1)) +
+        geom_line(color="#D16103")+geom_point(color="#D16103",size = 1)+
+        scale_x_datetime(labels = date_format("%m-%d"),date_breaks = dayrange)+
+        theme_minimal()+xlab("Date") + scale_y_continuous(labels = scales::comma)+
+        ylab(input$dist)
+      ggplotly(v)}
+  })
+  
+  
+  
+  
+  
+  
+  output$distplott <- renderPlotly({
+    daterange = input$daterange
+    data = filter(data, dateRep >= "2019-12-31",dateRep <= daterange)
+    dayrange = ceiling(as.integer(diff(range(as.Date(data$dateRep))))/10)
+    dayrange = str_c(dayrange,' days')
+    
+    
+    if(input$countries == 'World'){
+      if(input$dist == 'Cases(Daily)'){
+        n = aggregate(data$deaths, by=list(data$dateRep),sum)
+        deaths = n$x
+        dateRep = as.POSIXct(n$Group.1)
+        worlddata = data.frame(dateRep, deaths)}
+      
+      else if(input$dist == 'Cases(cumulative)'){
+        n = aggregate(data$deaths, by=list(data$dateRep),sum)
+        deaths = cumsum(n$x)
+        dateRep = as.POSIXct(n$Group.1)
+        worlddata = data.frame(dateRep, deaths)}
+      
+      else if(input$dist == 'Percentage increase'){
+        data = data[order(data$dateRep,decreasing =FALSE),]
+        n = aggregate(data$deaths, by=list(data$dateRep),sum)
+        deathsum = cumsum(n$x)
+        deaths = n$x
+        dateRep = as.POSIXct(n$Group.1)
+        worlddata = data.frame(dateRep, deathsum,deaths)
+        
+        for (i in 2:nrow(worlddata)){
+          worlddata$deaths[i] = worlddata$deaths[i]/worlddata$deathsum[i-1]
+        }
+        
+        worlddata$deaths[!is.finite(worlddata$deaths)] <- 0
+        }
+      
+        v = ggplot(data=worlddata, aes(x=dateRep, y=deaths)) +
+          geom_line(color="#999999")+geom_point(color="#999999",size = 1)+
+          scale_x_datetime(labels = date_format("%m-%d"),date_breaks = dayrange)+
+          theme_minimal()+xlab("Date") + scale_y_continuous(labels = scales::comma)+
+          ylab(input$dist)
+        ggplotly(v)
+    }
+    
+    
+    
+    else{
+      if(input$dist == 'Cases(Daily)'){
+        countrydata = subset(data,countriesAndTerritories == input$countries)
+        countrydata$dateRep = as.POSIXct(countrydata$dateRep)
+        
+        
+      }
+      else if(input$dist == 'Cases(cumulative)'){
+        countrydata = subset(data,countriesAndTerritories == input$countries)
+        countrydata$deaths = cumsum(countrydata$deaths)
+        countrydata$dateRep = as.POSIXct(countrydata$dateRep)
+      }
+      
+      else if(input$dist == 'Percentage increase'){
+        countrydata = subset(data,countriesAndTerritories == input$countries)
+        
+        countrydata$deathsum = cumsum(countrydata$deaths)
+        
+        for (i in 2:nrow(countrydata)){
+          countrydata$deaths[i] = countrydata$deaths[i]/countrydata$deathsum[i-1]
+        }
+        
+        countrydata$deaths[!is.finite(countrydata$deaths)] <- 0
+        
+        
+        
+        countrydata$dateRep = as.POSIXct(countrydata$dateRep)
+      }
+      v = ggplot(data=countrydata, aes(x=dateRep, y=deaths, group=1)) +
+        geom_line(color="#999999")+geom_point(color="#999999",size = 1)+
+        scale_x_datetime(labels = date_format("%m-%d"),date_breaks = dayrange)+
+        theme_minimal()+xlab("Date") + scale_y_continuous(labels = scales::comma)+
+        ylab(input$dist)
+      ggplotly(v)}
+    
+  })
+}) 
+
+shinyApp(ui = ui, server = server)
+  
+
+```
+```{r,echo = FALSE}
+shinyApp(ui = ui, server = server,options = list(width = "100%", height =500))
+```
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify> 
+The global pandemic outbreak started at the late Feburary. After two months fight, many countries are going to bend the curves(total cases and mortatilty),which means the daily new cases decrease with time. While in the global aspect, the figures still show an up-rising trend. Among the countries, China and Korea has decreased the daily cases to a low level. The daily new cases in USA still remain high. Based on the information, the pandemic is yet to finish. Countries and Regions still have to take measures to defend.</p>
+
+## Risk Factors
+Since December 2019, when coronavirus disease 2019 (Covid-19) arise in Wuhan city and rapidly spread throughout the world, data have been needed in order to examin the possible risk factors of the affected patients[@doi10.1056/NEJMoa2002032].The risk factors are the factors which may increase the possibility of death or suffering from severe symptoms when exist within infected people  was being one of the main concern of all people, researchers and specialists all around the world during the pandemic breakdown.
+
+The aim of this part is to examine the impact of Covid-19 on people according to **age, sex, smoking and some other health disease**.
+
+### Covid-19 and Gender
+
+> Data source:<a href='https://www.nejm.org/doi/10.1056/NEJMoa2002032'>NEJM</a>
+,<a href='https://ourworldindata.org/'>ourworldindata</a><br>Data explanation:1099 patients with confirmed Covid-19 cases from 552 hospitals in 30 provinces, autonomous regions, and municipalities in mainland China through January 29, 2020.
+
+![](sexpiechart.png){width=50%}
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+As we can see in the above visualization, while  47% of Chinese people as female, they form only about  41.7% of the total people who infected by covid-19. This means that <b>female are less likely to get infected by CoronaVirus</b>. Also the percentage of female who suffering from severe symptoms of the disease are remarkably less than the corresponding males by about 20% of the total cases.  this means that <b>males are more likly to have a severe deterioration</b> of the disease.</p>
+
+### Covid-19 and smoking
+> Data source:<a href='https://www.nejm.org/doi/10.1056/NEJMoa2002032'>NEJM</a>
+,<a href='https://ourworldindata.org/'>ourworldindata</a><br>Data explanation:1099 patients with confirmed Covid-19 cases from 552 hospitals in 30 provinces, autonomous regions, and municipalities in mainland China through January 29, 2020.
+
+![](smokingpiechart.png){width=50%}
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+The total percent of smoker people in china is 26%, but we can notice from the above visualization that only 11% of the people infected with Covid-19 are active smoker, this can tell us that <b>smoker people are less likely to get infected by Covid19</b>. However, it seems that about 30% of smokers who have Covid-19 are facing severe symptoms compared to only 12% from the non smoker patints. This means that <b>smokers are more likely to have a deterioration if they get infected by the virus</b>.</p>
+
+### Covid-19 and ages
+> Data source:<a href='https://www.nejm.org/doi/10.1056/NEJMoa2002032'>NEJM</a>
+,<a href='https://ourworldindata.org/'>ourworldindata</a><br>Data explanation:1099 patients with confirmed Covid-19 cases from 552 hospitals in 30 provinces, autonomous regions, and municipalities in mainland China through January 29, 2020.
+
+<iframe src="bar2.html" width="100%" height="500" id="igraph" scrolling="yes" seamless="seamless" frameBorder="0"> </iframe>
+
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+The percentages are chosen here  instead of the explicte number, as this can be helpful when comparing with the percentage in the total population. then the data has been standardized to rescale it, as this will give us more insight about how the the Covid-19 distribute over age periods and around the average of the each groupe. </p>
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+One can also see that the older people has relatively more possibility to suffering from severe symptoms. Even though the people who are in the age of 15-49 have the greatest number of both patients with severe and non-severe symptoms, but the rate is relatively lower than the rate in the older ages. One can notice that younger people have the least number of infected with the least severe symptoms.</p>
+
+
+### Covid-19 and other diseases
+> Data source:<a href='https://www.nejm.org/doi/10.1056/NEJMoa2002032'>NEJM</a>
+,<a href='https://ourworldindata.org/'>ourworldindata</a><br>Data explanation:1099 patients with confirmed Covid-19 cases from 552 hospitals in 30 provinces, autonomous regions, and municipalities in mainland China through January 29, 2020.
+
+<iframe src="bar3.html" width="100%" height=650 id="igraph" scrolling="no" seamless="seamless" frameBorder="0"> </iframe>
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+* <p style="text-align:justify; text-justify:inter-ideograph;>
+The respective Bar Chart shows selected diseases statistics from the count of 1099 patients those who are observed from the study.Some cases are lesser in density of which may reduce the confidence with the result shown by the figure.</p>
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+* <p style="text-align:justify; text-justify:inter-ideograph;>
+The most obvious point can be seen in some diseases that have a rate of severe cases which is higher than the normal rate i.e 
+about 15%, as seen from the first two plots. For example, Chronic obstructive pulmonary disease, Diabetes, Hypertension and 
+Coronary heart disease have higher possibility to suffer from severe deterioration when infected by Covid-19.  
+</p>
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+* <p style="text-align:justify; text-justify:inter-ideograph;>
+The opposite seems to be happen with those who have Hepatitis B infection, they do not have possibility than other people to suffer from a severe situation.</p>
+
+### Modeling
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+To seek any statistical findings among these variables, we suppose that there is a multi-linear realtionship between the death rate(deaths per million) and sex ratio,age and smokingrate of the countries. Several datasets were merged to conduct a multi-linear regression.</p>
+
+> Data source:<a href = 'https://population.un.org/wpp/Download/Standard/CSV/'>United Nations</a>,
+<a href='https://www.ecdc.europa.eu/en'>ECDC</a>,<a href = 'https://worldpopulationreview.com/countries/smoking-rates-by-country/'>worldpopulationreview</a>,
+<a href='https://data.worldbank.org/indicator/SP.POP.65UP.TO.ZS'>the World Bank</a><br>Date range: 2020-05-06
+
+The results are as follows:
+
+> sexratio:male population/female population <br>age: the ratio of people over 65 in countries<br>somking rates: smokers/total poplulation
+
+> significant level: 0.05<br>$H_{0}$: the variable has no association with the changes in the cases <br>$H_{1}$:the variable has association with the changes in the cases
+
+
+|features     | coeffiecents   |p-value|
+|-------------|----------------|-------|
+| sexratio    | $-9.318$|$0.3$|
+| age         | $63.61$|$1.2*10^{-7}$ |
+|somking rates|$-21.06$|$0.06$|
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+The coeffiecents suggest that sexratio and somking rates are inversely correlated with the deaths, whereas age is strongly postively correlated.</p>
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+The p-value shows that only the age variable is statistically significant, which means it do influence the output value:death rate. It can conclude that the country with a large proportion of elderly population has
+greater risk to have a high death rate.</p>
+
+***
+
+## Environmental Factors
+
+>The main environmental factors which have been shown to affect the spread of Covid-19 are temperature <a href = 'https://www.medrxiv.org/content/10.1101/2020.04.02.20051524v2'>(*Michael Triplett,2020*)</a>[@Triplett2020.04.02.20051524], humidity, and air pollution <a href = 'https://projects.iq.harvard.edu/covid-pm'>(*Rachel C. Nethery,2020*)</a>[@Wu2020.04.05.20054502]. It has also been suggested that factors like population density, latitude, number of sunlight hours or even windspeed correlate with virus spread.
+
+
+
+><p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+It is imporatant to know how these environmental factors impact on the epidemic.The main purpose of the part is to understand the connection between environmental variables and the spread of COVID-19.</p>
+
+
+### Temperature
+>Data source:<a href = 'https://www.kaggle.com/winterpierre91/covid19-global-weather-data'>Kaggle</a>,
+<a href= 'https://population.un.org/wpp/Download/Standard/CSV/'>United Nations</a>,
+<a href = 'https://www.ecdc.europa.eu/en'>ECDC</a><br>Data Range: 2020-03-15/2020-03-21
+
+![Daily Temperature changes by latitude](temp_lat.png){width=50%}![Cases distribution by latitude](lat_cases.png){width=50%}
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+On the left chart,the world average temperature increased by 0.2°C from 2020-03-15 to 2020-03-21.Meanwhile,the average temperature in the southern hemisphere decreases from 26.71 to 25.69.While ,it increases from 17.38 to 17.69 in the northern hemisphere.</p>
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+On the right chart, the cases are mostly aggregated between 30N and 50N, where the temperature is lower. In additon, the cases increases faster in northern hemisphere than the sourthern part, where the cases go up slightly. According to these two charts, we could make a hypothesis that the temperature is corelated the tramission of the COVID-19.</p>
+
+
+![2020-03-21](315_pop_case_temp.png){width=50%}![2020-03-15](321_pop_case_temp.png){width=50%}
+
+>X-axis: Case Rate = Cases/population<br>Y-axis: Population Density
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+From these two charts, it is clear that the area whose temperature is less than 20 has high caserate. On the opisite side, the case rate remains at lower level in the warmer area(temperature >20) although some are densed-populated. What else, even though in some area with high population density, the case rate is not extremly high compared to other areas. Regarding these two charts, we can conclude that population may not be the key factor. While temperature is correlated to the caserate.</p>
+
+### Humidity
+
+Compared to other outbreaks, these pendemic always distributed along the area around 30-50N where the relative humidity is 47% to 79%. In additon, regarding <a href = 'https://www.hindawi.com/journals/av/2011/734690/'>*Malik Peiris's research*</a>[@chan2011effects] about SARs, the virus retained its viability at relative humidity of 40%-50%.
+
+Therefore, we are curious about how the Covid-19 distributes by humidity.
+
+![2020-03-15](315_caserate_humi.png){width=50%}![2020-03-21](321_caserate_humi.png){width=50%}
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+It is evident to see that areas whose relative humidity is between 40 and 80 has higher caserate. While it is hard to detect any more connection between humidty and caserate.</p>
+
+### Modelling
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+In order to assess the validity of these claims, several datasets were merged three datasets and the values of the variates were standarized. Multilinear regression was then carried out, resulting in the following coefficients:</p>
+
+> variables:temperature,latitude,windspeed,sunhour,humidity,population density<br>output:cases
+
+> significant level: 0.05<br>$H_{0}$: the variable has no association with the changes in the cases <br>$H_{1}$:the variable has association with the changes in the cases
+
+
+The results are as follows:
+
+|features     | coeffiecents   |p-value|
+|-------------|----------------|-------|
+| temperature | $-3180.8$ |0.01|
+| Abs(latitude)| $-2013.5$|0.1| 
+|windspeed    |$-676.5$|0.4|       |
+| sunhour     |$-266.3$|0.7|
+| humidity     | $-3064.0$|0.003|
+|population density|$-59.96$|0.9| 
+>The latitude values are absolute in the model
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+The coeffiecents suggest that sunhour and population density are not highly correlated with the case rate, whereas temperature, windspeed, humidity and Abs(latitude) are strongly inversely correlated.</p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+According to the p-value, it tells that temperature and humidity are statistically significant while the rest features are not.</p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+Therefore, the statistic evidence shows that temperature and humidity can affect the case level.However, the other variables have no influence.</p>
+
+***
+
+## Outbreaks Comparisons
+
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+In the past few decades, we’ve seen a lot of other pandemics: SARS, H1N1 and Ebola. With new cases of the new coronavirus disease, COVID-19, growing day by day, it’s natural to compare the Covid-19 to other outbreaks in recent history.</p>
+
+
+Let’s take a look at how COVID-19 compares to SARS, H1N1 and Ebola. 
+
+```{r, echo=FALSE}
+diseases = c('COVID-19','H1N1','SARS','Ebola')
+averagedeath = c(1740,743,3.2,5.3)
+deaths = c(207094,362000,774,13023)
+deathsrate = c(1.4,0.05,9.6,50)
+cases = c(3069757,60800000,8096,28646)
+countries = c(186,214,26,10)
+
+diseasedata = data.frame(diseases,averagedeath,deaths,deathsrate,cases,countries)
+
+ui = shinyUI(fluidPage(theme = shinytheme("simplex"),
+          titlePanel(""),
+          sidebarLayout(
+            sidebarPanel(
+                    radioButtons("dist", 
+                                 label = h3("Select Comparsion"),
+                                        choices = list("Daily average death" = 'averagedeath', 
+                                                    "Deaths" = 'deaths', 
+                                                    "Death rate" = 'deathsrate',
+                                                    'Total cases' = 'cases',
+                                                    'Countries/Regions affected' ='countries'), 
+                                        selected = 'deaths'),
+                    width = 3),
+                         
+                     mainPanel(
+                       plotlyOutput('distplot'),width = 6),
+                    
+                           )
+                         )
+                       )
+
+
+
+server = shinyServer(function(input, output){
+
+  output$distplot <- renderPlotly({ 
+    m = input$dist
+    disease = diseasedata$diseases
+    amount = diseasedata[,m]
+    data = data.frame(disease,amount)
+    datanew =data[order(amount),]
+    p<-ggplot(data=datanew, aes(x=disease, y=amount))+
+     geom_bar(stat="identity",width = 0.7,fill = 'steelblue')+scale_y_continuous(labels = comma)+
+      xlab("Disease") +
+      ylab("Amount") +
+     coord_flip()
+    
+    ggplotly(p)
+    
+    })
+  
+})
+
+shinyApp(ui = ui, server = server,options = list(width = "100%", height =500))
+```
+
+**What we can know from the visualizations:**
+
+* Covid-19 is less deadly than either SARS or Ebola but higher than H1N1.
+* <p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+Coronavirus has spread much more widely than SARS or Ebola. 186 countries/regions are influenced by coronavirus.</p>
+* <p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+Compared to H1N1，Covid-19 is less influenced than it by now. However, considering its current trend (which mentioned in part 2), it is possible that coronavirus will continue expand to more places.</p>
+
+
+
+
+***
+## Conclusion
+
+### What we have done:
+
+* We overviewed the global impact of covid-19 through our slide show visulizations.
+
+* We examined the impact of Covid-19 on people according to risk factors.
+
+* <p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+We analyzed how the environmental factors affect the spread of the Covid-19, followed by a multilinear regression. The statistic evidence tells that temperature and humidity play an important role in the model.</p>
+
+* <p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+The comparisons among dieseas were carried out to find more features of coronavirus.</p>
+
+### What is missing:
+<p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+Due to the limit of dataset availabity, some analysises were made based on  small datasets, which could affect the result partially. To narrow down the bias of the analysis, many citations were used to prove our opionions.</p>
+
+### Further study:
+
+* <p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+A logistic regression can be made to figure out the probability of a man getting infected based on his sex,age,medical history or living habits. However, this study need a plenty of data and advanced machine learning methods.</p>
+
+* <p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+As for the environmental factor, a further study can be carried out to find out under which circumstances the virus is the least active. The environmental change is in hand of nobody but, the manipulative change or just a change might showcase some distortions in the count of cases, deaths or recoveries affected by the virus..</p>
+
+* <p style="text-align:justify; text-justify:inter-ideograph;></p>
+<p style="text-align:justify; text-justify:inter-ideograph;>
+Since the spread of Covid-19, each kind of market, utility or an individual is getting affected due to its active or passive presence. Such passive or active impact could be analyzed and preventive measures could be accordingly analyzed & stated in order to flatten the curve. 
+</p>
+
+***
+
+```{r,echo=FALSE,include = FALSE}
+library(kableExtra)
+options(knitr.table.format = "html")
+```
+
+<a href='https://nbviewer.jupyter.org/github/Social-Data-AV/COVID-19/blob/4967e8547db4d6107f35eaeab41d7d8b5ebac115/iPython_notebook_final_project.ipynb'>Link to the explainer notebook</a>
+
+<a href='https://github.com/Social-Data-AV/COVID-19/tree/master/datasets'>Link to the datasets</a>
+
+<a href='hhttps://github.com/Social-Data-AV/COVID-19/tree/4967e8547db4d6107f35eaeab41d7d8b5ebac115/'>Link to our github</a>
+
+<a href='https://www.youtube.com/watch?v=--AMiwuPjLI'>Link to our Project A</a>
+
+<br>
+<br>
+*Reference*
+
+
